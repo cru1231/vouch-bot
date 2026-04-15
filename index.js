@@ -2,34 +2,20 @@ const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } =
 
 const vouches = {};
 
-function getVouches(userId) {
-  return vouches[userId] ?? 0;
-}
-
-function addVouch(userId) {
-  vouches[userId] = (vouches[userId] ?? 0) + 1;
-  return vouches[userId];
-}
+function getVouches(userId) { return vouches[userId] ?? 0; }
+function addVouch(userId) { vouches[userId] = (vouches[userId] ?? 0) + 1; return vouches[userId]; }
 
 const commands = [
-  new SlashCommandBuilder()
-    .setName('vouch')
-    .setDescription('Add a vouch to a user')
-    .addUserOption(option =>
-      option.setName('user').setDescription('The user to vouch for').setRequired(true)
-    )
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName('show')
-    .setDescription('Show how many vouches a user has')
-    .addUserOption(option =>
-      option.setName('user').setDescription('The user to check').setRequired(true)
-    )
-    .toJSON(),
+  new SlashCommandBuilder().setName('vouch').setDescription('Add a vouch to a user')
+    .addUserOption(o => o.setName('user').setDescription('The user to vouch for').setRequired(true)).toJSON(),
+  new SlashCommandBuilder().setName('show').setDescription('Show how many vouches a user has')
+    .addUserOption(o => o.setName('user').setDescription('The user to check').setRequired(true)).toJSON(),
+  new SlashCommandBuilder().setName('setvouches').setDescription('Set a user\'s vouch count (admin only)')
+    .addUserOption(o => o.setName('user').setDescription('The user to set vouches for').setRequired(true))
+    .addIntegerOption(o => o.setName('amount').setDescription('The number of vouches to set').setRequired(true).setMinValue(0)).toJSON(),
 ];
 
 let commandsRegistered = false;
-
 async function registerSlashCommands(token, clientId) {
   if (commandsRegistered) return;
   try {
@@ -37,22 +23,15 @@ async function registerSlashCommands(token, clientId) {
     await rest.put(Routes.applicationCommands(clientId), { body: commands });
     commandsRegistered = true;
     console.log('Slash commands registered globally');
-  } catch (err) {
-    console.error('Failed to register slash commands:', err);
-  }
+  } catch (err) { console.error('Failed to register slash commands:', err); }
 }
 
 const TOKEN = process.env.DISCORD_TOKEN;
 if (!TOKEN) { console.error('DISCORD_TOKEN missing!'); process.exit(1); }
 
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
-});
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
-client.once(Events.ClientReady, async (readyClient) => {
-  console.log(`Logged in as ${readyClient.user.tag}`);
-  await registerSlashCommands(TOKEN, readyClient.user.id);
-});
+client.once(Events.ClientReady, async (r) => { console.log(`Logged in as ${r.user.tag}`); await registerSlashCommands(TOKEN, r.user.id); });
 
 client.on(Events.MessageCreate, async (message) => {
   try {
@@ -78,13 +57,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.commandName === 'show') {
       const target = interaction.options.getUser('user', true);
-      const total = getVouches(target.id);
-      await interaction.reply(`${target.displayName} has ${total} vouch${total === 1 ? '' : 'es'}.`);
+      await interaction.reply(`${target.displayName} has ${getVouches(target.id)} vouches.`);
+    }
+    if (interaction.commandName === 'setvouches') {
+      if (!interaction.member || !interaction.member.permissions.has('ManageGuild')) {
+        await interaction.reply({ content: 'You need the Manage Server permission to use this command.', ephemeral: true }); return;
+      }
+      const target = interaction.options.getUser('user', true);
+      const amount = interaction.options.getInteger('amount', true);
+      vouches[target.id] = amount;
+      await interaction.reply(`${target.displayName}'s vouches have been set to ${amount}.`);
     }
   } catch (err) {
     console.error('Error handling slash command:', err);
     if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: 'Something went wrong.', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: 'Something went wrong. Please try again.', ephemeral: true }).catch(() => {});
     }
   }
 });
