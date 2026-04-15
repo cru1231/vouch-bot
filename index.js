@@ -1,16 +1,23 @@
 const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } = require('discord.js');
 
 const vouches = {};
+const lastVouch = {};
+
+const COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
 function getVouches(userId) { return vouches[userId] ?? 0; }
 function addVouch(userId) { vouches[userId] = (vouches[userId] ?? 0) + 1; return vouches[userId]; }
+function getCooldownLeft(voucherId) {
+  if (!lastVouch[voucherId]) return 0;
+  return Math.max(0, COOLDOWN_MS - (Date.now() - lastVouch[voucherId]));
+}
 
 const commands = [
   new SlashCommandBuilder().setName('vouch').setDescription('Add a vouch to a user')
     .addUserOption(o => o.setName('user').setDescription('The user to vouch for').setRequired(true)).toJSON(),
   new SlashCommandBuilder().setName('show').setDescription('Show how many vouches a user has')
     .addUserOption(o => o.setName('user').setDescription('The user to check').setRequired(true)).toJSON(),
-  new SlashCommandBuilder().setName('setvouches').setDescription('Set a user\'s vouch count (admin only)')
+  new SlashCommandBuilder().setName('setvouches').setDescription("Set a user's vouch count (admin only)")
     .addUserOption(o => o.setName('user').setDescription('The user to set vouches for').setRequired(true))
     .addIntegerOption(o => o.setName('amount').setDescription('The number of vouches to set').setRequired(true).setMinValue(0)).toJSON(),
 ];
@@ -29,9 +36,14 @@ async function registerSlashCommands(token, clientId) {
 const TOKEN = process.env.DISCORD_TOKEN;
 if (!TOKEN) { console.error('DISCORD_TOKEN missing!'); process.exit(1); }
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+});
 
-client.once(Events.ClientReady, async (r) => { console.log(`Logged in as ${r.user.tag}`); await registerSlashCommands(TOKEN, r.user.id); });
+client.once(Events.ClientReady, async (r) => {
+  console.log(`Logged in as ${r.user.tag}`);
+  await registerSlashCommands(TOKEN, r.user.id);
+});
 
 client.on(Events.MessageCreate, async (message) => {
   try {
@@ -40,6 +52,13 @@ client.on(Events.MessageCreate, async (message) => {
     const mentioned = message.mentions.users.first();
     if (!mentioned) { await message.reply('Please mention a user to vouch for.'); return; }
     if (mentioned.id === message.author.id) { await message.reply('You cannot vouch for yourself.'); return; }
+    const cooldown = getCooldownLeft(message.author.id);
+    if (cooldown > 0) {
+      const mins = Math.ceil(cooldown / 60000);
+      await message.reply(`You need to wait ${mins} more minute${mins === 1 ? '' : 's'} before vouching again.`);
+      return;
+    }
+    lastVouch[message.author.id] = Date.now();
     const total = addVouch(mentioned.id);
     await message.reply(`${mentioned.displayName} now has ${total} vouch${total === 1 ? '' : 'es'}.`);
   } catch (err) { console.error('Error handling message command:', err); }
@@ -52,6 +71,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const target = interaction.options.getUser('user', true);
       if (target.id === interaction.user.id) { await interaction.reply({ content: 'You cannot vouch for yourself.', ephemeral: true }); return; }
       if (target.bot) { await interaction.reply({ content: 'You cannot vouch for a bot.', ephemeral: true }); return; }
+      const cooldown = getCooldownLeft(interaction.user.id);
+      if (cooldown > 0) {
+        const mins = Math.ceil(cooldown / 60000);
+        await interaction.reply({ content: `You need to wait ${mins} more minute${mins === 1 ? '' : 's'} before vouching again.`, ephemeral: true });
+        return;
+      }
+      lastVouch[interaction.user.id] = Date.now();
       const total = addVouch(target.id);
       await interaction.reply(`${target.displayName} now has ${total} vouch${total === 1 ? '' : 'es'}.`);
     }
